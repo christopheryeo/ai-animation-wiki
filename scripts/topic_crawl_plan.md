@@ -3,7 +3,7 @@ type: plan
 name: topic-crawl
 status: ready
 created: 2026-09-06
-updated: 2026-09-12
+updated: 2026-09-17
 owner: ChatGPT Codex
 ---
 
@@ -135,6 +135,36 @@ ledger; it does **not** relax this plan's source, relevance, or validation gates
   incomplete while individual articles remain successful; never relabel successfully processed
   articles as failed because the overall topic run failed.
 
+## Applied lessons (Batches 1–3, 2026-09)
+
+- **Keyword calibration (Step 2/3).** Keyword choice is the biggest quality/cost lever. Before
+  freezing `search-profile.json`, probe `totalResults` for each candidate variant with a single
+  page-1 call. Prefer discriminating phrases over generic ones (an over-broad keyword such as
+  "animation studio" filled 200 candidates for 1 relevant), and avoid exact phrases that return
+  zero (technique terms like "AI inbetweening" are absent from the provider index — lean on SET B
+  there). Cap or date-bucket high-volume terms so a page cap does not silently truncate older
+  in-window coverage, and never accept a keyword's zero as proof of no coverage: the provider is
+  volatile (the same phrase returned 756 then 0 on consecutive calls), so re-issue a suspicious zero.
+- **OpenAI cost controls.** The relevance gate and enrichment are the only OpenAI consumers. Run the
+  gate at `--batch-size 20` and enrichment at `--article-batch-size 10 --preserve-topic` (see Step 9);
+  together these cut calls ~80% versus one article per call. Better keywords further shrink the gate
+  pool (fewer off-topic candidates to assess).
+- **SET B realism.** For the specialist animation trade press (AWN, Cartoon Brew, ITmedia), SET B
+  rarely survives the gates: most articles are not in the NewsAPI index (`articleMapper`→null),
+  `getArticle` returns empty bodies for several mapped URIs, and in-range pages often expose no
+  machine-readable date. `topic_crawl_extract_url.py` now recovers dates from meta/JSON-LD where
+  present, but treat SET B as a discovery aid with low expected yield for the trade press — never let
+  a low SET B yield block a topic whose SET A path satisfied its gates.
+- **Duplicate detection (Step 7).** Deduplicate against existing vault articles by `articleId`
+  (the deterministic SHA-256 of the canonical URL), not only by URL string — a compiled note's stored
+  URL or filename can differ from the intake's and slip a cross-batch duplicate through to a
+  FileExistsError at cascade. `materialize_topic_crawl_batch.py` now also checks `articleId`.
+- **Counts (Step 10/11).** The cascade reassigns each article to canonical topics by content, so an
+  article crawled under one topic may link under a sibling topic instead. Per-crawl-topic counts can
+  therefore differ from where articles finally link; the **batch total of distinct cascaded articles
+  is the reliable figure**, and per-topic `articleCount` reflects the cascade's content-based
+  selection.
+
 ---
 
 ## Step 0 — Preflight (once per run)
@@ -256,10 +286,21 @@ canonical URL and URI for SET B deduplication even when the article is off-topic
 1. Use the grounded URL-discovery capability of the current environment for **all article URLs
    related to the topic** within the date range, using the Topic `displayName`, aliases, and the
    Crawl Prompt's inclusions/exclusions. In Claude use Claude-grounded discovery; in Codex use
-   Codex-grounded discovery. Request a plain list of direct article URLs only — no homepages,
-   index/category pages, snippets, or commentary.
-2. Record the exact request, environment name, and raw returned list in the run manifest.
-3. Canonicalize every returned URL (resolve redirects, strip non-identity tracking params); drop
+   Codex-grounded discovery. Request structured direct-article candidates only — no homepages,
+   index/category pages, snippets, or commentary. Each candidate must include its direct URL,
+   source domain, attributable title, `isDirectArticle: true`, publication-date evidence (date and
+   supporting text), and geography/cross-border evidence. Geography evidence must explicitly be
+   `qualifying`, `out-of-scope`, or `not-established`; a qualifying candidate must state the
+   covered-region or cross-border relationship and its supporting text. Do not accept a bare URL
+   list as SET B discovery evidence.
+2. Record the exact request, environment name, and raw structured list in
+   `setB-discovery.json` in the run directory. Before any mapping, validate it:
+   ```bash
+   python3 scripts/validate_set_b_discovery.py --manifest <run-dir>/setB-discovery.json
+   ```
+   Missing, malformed, non-direct, date-unattributed, or geography-unattributed candidates must
+   receive a terminal `held` disposition at discovery; they must not reach provider mapping.
+3. Canonicalize every validated returned URL (resolve redirects, strip non-identity tracking params); drop
    obvious non-article URLs.
 4. When SET A is operational but returns zero or materially weak coverage, run the same bounded,
    attributable direct-article discovery against the frozen official-domain list in the search
@@ -269,11 +310,12 @@ canonical URL and URI for SET B deduplication even when the article is off-topic
 
 ## Step 4A — SET B URL relevance gate
 
-Before URI mapping or provider retrieval, assess each remaining grounded URL using the discovery
-result's attributable title, snippet, publication evidence, and URL path against the resolved Topic
-Entity. Record `urlRelevant`, `urlRelevanceConfidence`, and `urlRelevanceReason`:
+Before URI mapping or provider retrieval, assess each remaining grounded URL using the validated
+discovery record's attributable title, publication evidence, geography/cross-border evidence, and
+URL path against the resolved Topic Entity. Record `urlRelevant`, `urlRelevanceConfidence`, and
+`urlRelevanceReason`:
 
-- reject clearly off-topic, non-article, duplicate, or out-of-range candidates immediately;
+- reject clearly off-topic, out-of-scope, non-article, duplicate, or out-of-range candidates immediately;
 - hold candidates without sufficient attributable evidence;
 - map and retrieve only URLs assessed as plausibly relevant.
 
@@ -388,7 +430,18 @@ serializer. This is the same class of failure as the unquoted `#`-tag hazard in
 
 1. Freeze a newline-delimited manifest of only the newly normalized filenames.
 2. Run `scripts/enrich_radar_inputs.py` to assess existing-vocabulary tags, outlet, outlet country,
-   institutional category, tone, sentiment, and event type.
+   institutional category, tone, sentiment, and event type. Enrichment requires at least one active
+   Tag entity under `entities/tag/`; with an empty vocabulary the tag pass aborts and notes keep
+   default metadata. Always pass **`--preserve-topic`** in this pipeline: enrichment otherwise
+   overwrites the note's `topic` field with the primary issue tag (a radar convention), but the
+   cascade needs `topic` to remain the canonical Topic display name or Step 10 topic selection fails.
+   To cut OpenAI calls, pass **`--article-batch-size N`** (e.g. 10): each chunk is classified in two
+   calls total (primary + review) instead of two per article, and a malformed batch falls back to
+   per-article automatically.
+   ```bash
+   python3 scripts/enrich_radar_inputs.py --input-dir Inputs/articles/<YYYY-MM> \
+     --manifest <frozen-manifest-path> --no-fetch --preserve-topic --article-batch-size 10 --apply
+   ```
 3. Require the configured independent-agreement and confidence thresholds before applying
    judgment-heavy values; send disagreements/low-confidence/missing evidence to attributed review;
    apply only reviewed results.
@@ -460,6 +513,25 @@ cascade.
    paths, elapsed time, and average time per topic. Use a single canonical `status` field in both
    durable state and receipt; do not introduce an alternate `goalStatus` field.
 
+## Step 12 — Write the daily Crawl Log (once per run; mandatory)
+
+After reconciliation and the run receipt, create or update the Singapore-date daily note in
+`entities/crawl-log/` named `YYYY-MM-DD Crawl Log.md`. Add the completed crawl as one entry in
+ascending actual-start-time order. The entry must include:
+
+1. `#### Cascaded articles by topic` — only topics with one or more successfully cascaded articles,
+   with each exact cascaded count.
+2. `#### Crawl review` — outcome, dispositions, validation state, and receipt evidence.
+3. `#### Lessons learned` — evidence-based operational learnings.
+4. `#### Recommendations to improve the topic crawl plan` — evidence, recommended change, expected
+   accuracy benefit, and expected OpenAI API-call reduction.
+
+Record zero-result, partial, or failed crawls honestly in the review even when the topic table has
+no rows. Treat each recorded recommendation as authorised for immediate implementation: apply the
+scoped code or crawl-plan change, validate it, and record the result in the same Crawl Log entry.
+Then update the daily note's aggregate frontmatter, append the domain audit `log.md` entry, and
+regenerate `entities/crawl-log/catalog.md`.
+
 ## Breakout conditions
 
 ### Retry and resume
@@ -495,8 +567,9 @@ goal may close with held items, but never with an unreconciled candidate or unre
 ## End conditions (success)
 
 The run succeeds only when the Step 11 run-level completion is done — every candidate across all
-topics has exactly one final disposition, `entities/topic/catalog.md` is rebuilt, and the run receipt
-is written — and **every selected topic** passes all of the following:
+topics has exactly one final disposition, `entities/topic/catalog.md` is rebuilt, the run receipt
+is written, and the Step 12 Crawl Log entry is recorded — and **every selected topic** passes all of
+the following:
 
 - [ ] Exactly one canonical Topic Entity resolved and frozen; both dates and timezone validated.
 - [ ] SET A built from NewsAPI.ai keyword search; every page was verified with `articlesPage`, and
@@ -528,6 +601,8 @@ is written — and **every selected topic** passes all of the following:
 - [ ] Every accepted article passed the topical-relevance gate; off-topic keyword/URL matches (e.g. a
       "NS" railroad hit) were dropped with `off-topic` reasons, not ingested.
 - [ ] Every candidate has one final disposition; topic status/checkpoint reflect verified completion.
+- [ ] The daily Crawl Log records the completed crawl, its positive cascaded-topic counts, review,
+      lessons, and autonomous improvement recommendations.
 
 ## Tests / Verification
 

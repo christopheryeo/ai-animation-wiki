@@ -92,7 +92,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--batch-size", type=int, default=10)
+    parser.add_argument("--batch-size", type=int, default=20,
+                        help="candidates per model call (default 20; bodies are truncated to 5000 chars each)")
     parser.add_argument("--model", default="gpt-5.6")
     parser.add_argument("--only", action="append", help="process one topic ID; repeatable")
     parser.add_argument("--offset", type=int, default=0, help="candidate offset for a bounded checkpoint")

@@ -62,7 +62,9 @@ python3 scripts/topic_crawl_goal_runner.py record-month-receipts \
 
 ## Autonomous operating rules
 
-1. Run Set A relevance before Set B discovery and Set B URL relevance before mapping or retrieval.
+1. Run Set A relevance before Set B discovery. Validate the structured SET B discovery manifest,
+   then run Set B URL relevance before mapping or retrieval; discovery candidates missing direct-
+   article, date, or geography/cross-border evidence are terminally held before mapping.
 2. Apply `schemas/topic_crawl_resolution_policy.yaml`; inconclusive source-body evidence is `held`.
 3. Use at most three attempts per transient request with configured backoff, then record `held`.
 4. Enforce the independent 500-item ceiling for Set A and Set B per topic.
