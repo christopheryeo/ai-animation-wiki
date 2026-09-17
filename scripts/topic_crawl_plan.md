@@ -3,7 +3,7 @@ type: plan
 name: topic-crawl
 status: ready
 created: 2026-09-06
-updated: 2026-09-12
+updated: 2026-09-17
 owner: ChatGPT Codex
 ---
 
@@ -134,6 +134,36 @@ ledger; it does **not** relax this plan's source, relevance, or validation gates
   that candidate's own failed gate. The topic crawl status is run-level and may be `Failed` or
   incomplete while individual articles remain successful; never relabel successfully processed
   articles as failed because the overall topic run failed.
+
+## Applied lessons (Batches 1–3, 2026-09)
+
+- **Keyword calibration (Step 2/3).** Keyword choice is the biggest quality/cost lever. Before
+  freezing `search-profile.json`, probe `totalResults` for each candidate variant with a single
+  page-1 call. Prefer discriminating phrases over generic ones (an over-broad keyword such as
+  "animation studio" filled 200 candidates for 1 relevant), and avoid exact phrases that return
+  zero (technique terms like "AI inbetweening" are absent from the provider index — lean on SET B
+  there). Cap or date-bucket high-volume terms so a page cap does not silently truncate older
+  in-window coverage, and never accept a keyword's zero as proof of no coverage: the provider is
+  volatile (the same phrase returned 756 then 0 on consecutive calls), so re-issue a suspicious zero.
+- **OpenAI cost controls.** The relevance gate and enrichment are the only OpenAI consumers. Run the
+  gate at `--batch-size 20` and enrichment at `--article-batch-size 10 --preserve-topic` (see Step 9);
+  together these cut calls ~80% versus one article per call. Better keywords further shrink the gate
+  pool (fewer off-topic candidates to assess).
+- **SET B realism.** For the specialist animation trade press (AWN, Cartoon Brew, ITmedia), SET B
+  rarely survives the gates: most articles are not in the NewsAPI index (`articleMapper`→null),
+  `getArticle` returns empty bodies for several mapped URIs, and in-range pages often expose no
+  machine-readable date. `topic_crawl_extract_url.py` now recovers dates from meta/JSON-LD where
+  present, but treat SET B as a discovery aid with low expected yield for the trade press — never let
+  a low SET B yield block a topic whose SET A path satisfied its gates.
+- **Duplicate detection (Step 7).** Deduplicate against existing vault articles by `articleId`
+  (the deterministic SHA-256 of the canonical URL), not only by URL string — a compiled note's stored
+  URL or filename can differ from the intake's and slip a cross-batch duplicate through to a
+  FileExistsError at cascade. `materialize_topic_crawl_batch.py` now also checks `articleId`.
+- **Counts (Step 10/11).** The cascade reassigns each article to canonical topics by content, so an
+  article crawled under one topic may link under a sibling topic instead. Per-crawl-topic counts can
+  therefore differ from where articles finally link; the **batch total of distinct cascaded articles
+  is the reliable figure**, and per-topic `articleCount` reflects the cascade's content-based
+  selection.
 
 ---
 
@@ -400,7 +430,18 @@ serializer. This is the same class of failure as the unquoted `#`-tag hazard in
 
 1. Freeze a newline-delimited manifest of only the newly normalized filenames.
 2. Run `scripts/enrich_radar_inputs.py` to assess existing-vocabulary tags, outlet, outlet country,
-   institutional category, tone, sentiment, and event type.
+   institutional category, tone, sentiment, and event type. Enrichment requires at least one active
+   Tag entity under `entities/tag/`; with an empty vocabulary the tag pass aborts and notes keep
+   default metadata. Always pass **`--preserve-topic`** in this pipeline: enrichment otherwise
+   overwrites the note's `topic` field with the primary issue tag (a radar convention), but the
+   cascade needs `topic` to remain the canonical Topic display name or Step 10 topic selection fails.
+   To cut OpenAI calls, pass **`--article-batch-size N`** (e.g. 10): each chunk is classified in two
+   calls total (primary + review) instead of two per article, and a malformed batch falls back to
+   per-article automatically.
+   ```bash
+   python3 scripts/enrich_radar_inputs.py --input-dir Inputs/articles/<YYYY-MM> \
+     --manifest <frozen-manifest-path> --no-fetch --preserve-topic --article-batch-size 10 --apply
+   ```
 3. Require the configured independent-agreement and confidence thresholds before applying
    judgment-heavy values; send disagreements/low-confidence/missing evidence to attributed review;
    apply only reviewed results.
