@@ -82,6 +82,24 @@ def existing_urls() -> set[str]:
     return result
 
 
+def existing_article_ids() -> set[str]:
+    """Collect existing ``crawl-<sha>`` article IDs from intake and compiled note filenames.
+
+    ``articleId`` is a deterministic SHA-256 of the canonical URL, so it is a reliable
+    cross-batch duplicate key even when a compiled note's slug/filename or its stored URL
+    string differs from the intake's (which URL-only matching in ``existing_urls`` misses,
+    causing a FileExistsError at cascade — observed with Batch-1 articles reappearing in
+    later batches).
+    """
+    result: set[str] = set()
+    for root in (ROOT / "Inputs" / "articles", ROOT / "entities" / "article"):
+        for path in root.rglob("*.md"):
+            match = re.match(r"(crawl-[0-9a-f]{64})", path.name)
+            if match:
+                result.add(match.group(1))
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=Path, required=True)
@@ -90,6 +108,7 @@ def main() -> int:
     args = parser.parse_args()
     records = raw_records(args.run_dir)
     known_urls = existing_urls()
+    known_ids = existing_article_ids()
     selected: dict[str, dict] = {}
     duplicate_topics: dict[str, list[str]] = {}
     held: list[dict] = []
@@ -118,7 +137,7 @@ def main() -> int:
         article_id = "crawl-" + hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()
         filename = f"{article_id}-{slug(str(article.get('title') or 'untitled'))}.md"
         target = ROOT / "Inputs" / "articles" / month / filename
-        if target.exists() or canonical_url in known_urls:
+        if target.exists() or canonical_url in known_urls or article_id in known_ids:
             output_rows.append({"uri": uri, "topicId": topic_id, "filename": str(target.relative_to(ROOT)), "disposition": "duplicate-existing"})
             continue
         source = article.get("source") or {}

@@ -256,10 +256,21 @@ canonical URL and URI for SET B deduplication even when the article is off-topic
 1. Use the grounded URL-discovery capability of the current environment for **all article URLs
    related to the topic** within the date range, using the Topic `displayName`, aliases, and the
    Crawl Prompt's inclusions/exclusions. In Claude use Claude-grounded discovery; in Codex use
-   Codex-grounded discovery. Request a plain list of direct article URLs only — no homepages,
-   index/category pages, snippets, or commentary.
-2. Record the exact request, environment name, and raw returned list in the run manifest.
-3. Canonicalize every returned URL (resolve redirects, strip non-identity tracking params); drop
+   Codex-grounded discovery. Request structured direct-article candidates only — no homepages,
+   index/category pages, snippets, or commentary. Each candidate must include its direct URL,
+   source domain, attributable title, `isDirectArticle: true`, publication-date evidence (date and
+   supporting text), and geography/cross-border evidence. Geography evidence must explicitly be
+   `qualifying`, `out-of-scope`, or `not-established`; a qualifying candidate must state the
+   covered-region or cross-border relationship and its supporting text. Do not accept a bare URL
+   list as SET B discovery evidence.
+2. Record the exact request, environment name, and raw structured list in
+   `setB-discovery.json` in the run directory. Before any mapping, validate it:
+   ```bash
+   python3 scripts/validate_set_b_discovery.py --manifest <run-dir>/setB-discovery.json
+   ```
+   Missing, malformed, non-direct, date-unattributed, or geography-unattributed candidates must
+   receive a terminal `held` disposition at discovery; they must not reach provider mapping.
+3. Canonicalize every validated returned URL (resolve redirects, strip non-identity tracking params); drop
    obvious non-article URLs.
 4. When SET A is operational but returns zero or materially weak coverage, run the same bounded,
    attributable direct-article discovery against the frozen official-domain list in the search
@@ -269,11 +280,12 @@ canonical URL and URI for SET B deduplication even when the article is off-topic
 
 ## Step 4A — SET B URL relevance gate
 
-Before URI mapping or provider retrieval, assess each remaining grounded URL using the discovery
-result's attributable title, snippet, publication evidence, and URL path against the resolved Topic
-Entity. Record `urlRelevant`, `urlRelevanceConfidence`, and `urlRelevanceReason`:
+Before URI mapping or provider retrieval, assess each remaining grounded URL using the validated
+discovery record's attributable title, publication evidence, geography/cross-border evidence, and
+URL path against the resolved Topic Entity. Record `urlRelevant`, `urlRelevanceConfidence`, and
+`urlRelevanceReason`:
 
-- reject clearly off-topic, non-article, duplicate, or out-of-range candidates immediately;
+- reject clearly off-topic, out-of-scope, non-article, duplicate, or out-of-range candidates immediately;
 - hold candidates without sufficient attributable evidence;
 - map and retrieve only URLs assessed as plausibly relevant.
 
@@ -460,6 +472,25 @@ cascade.
    paths, elapsed time, and average time per topic. Use a single canonical `status` field in both
    durable state and receipt; do not introduce an alternate `goalStatus` field.
 
+## Step 12 — Write the daily Crawl Log (once per run; mandatory)
+
+After reconciliation and the run receipt, create or update the Singapore-date daily note in
+`entities/crawl-log/` named `YYYY-MM-DD Crawl Log.md`. Add the completed crawl as one entry in
+ascending actual-start-time order. The entry must include:
+
+1. `#### Cascaded articles by topic` — only topics with one or more successfully cascaded articles,
+   with each exact cascaded count.
+2. `#### Crawl review` — outcome, dispositions, validation state, and receipt evidence.
+3. `#### Lessons learned` — evidence-based operational learnings.
+4. `#### Recommendations to improve the topic crawl plan` — evidence, recommended change, expected
+   accuracy benefit, and expected OpenAI API-call reduction.
+
+Record zero-result, partial, or failed crawls honestly in the review even when the topic table has
+no rows. Treat each recorded recommendation as authorised for immediate implementation: apply the
+scoped code or crawl-plan change, validate it, and record the result in the same Crawl Log entry.
+Then update the daily note's aggregate frontmatter, append the domain audit `log.md` entry, and
+regenerate `entities/crawl-log/catalog.md`.
+
 ## Breakout conditions
 
 ### Retry and resume
@@ -495,8 +526,9 @@ goal may close with held items, but never with an unreconciled candidate or unre
 ## End conditions (success)
 
 The run succeeds only when the Step 11 run-level completion is done — every candidate across all
-topics has exactly one final disposition, `entities/topic/catalog.md` is rebuilt, and the run receipt
-is written — and **every selected topic** passes all of the following:
+topics has exactly one final disposition, `entities/topic/catalog.md` is rebuilt, the run receipt
+is written, and the Step 12 Crawl Log entry is recorded — and **every selected topic** passes all of
+the following:
 
 - [ ] Exactly one canonical Topic Entity resolved and frozen; both dates and timezone validated.
 - [ ] SET A built from NewsAPI.ai keyword search; every page was verified with `articlesPage`, and
@@ -528,6 +560,8 @@ is written — and **every selected topic** passes all of the following:
 - [ ] Every accepted article passed the topical-relevance gate; off-topic keyword/URL matches (e.g. a
       "NS" railroad hit) were dropped with `off-topic` reasons, not ingested.
 - [ ] Every candidate has one final disposition; topic status/checkpoint reflect verified completion.
+- [ ] The daily Crawl Log records the completed crawl, its positive cascaded-topic counts, review,
+      lessons, and autonomous improvement recommendations.
 
 ## Tests / Verification
 
