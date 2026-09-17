@@ -1,0 +1,11 @@
+version: 1
+name: conservative-article-enrichment-resolution
+rules:
+  model_review_only: accept_agreed_values
+  event_type: Unfacilitated
+  category: Non-institutional
+  tone: Factual
+  tone_sentiment: Neutral
+  tags: source_supported_existing_only
+  unresolved_source_body: held
+provenance: approved-by-christopher-yeo-2026-09-15

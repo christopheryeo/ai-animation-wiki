@@ -1,0 +1,14 @@
+entity: outlet
+id_field: outletId
+title_field: displayName
+fields:
+  outletId:      {type: string, unique: true}
+  displayName:   {type: string}
+  country:       {type: string}
+    mediaCategory: {type: string}
+    channels:      {type: list}
+    languages:     {type: list}
+    crawlDomains:  {type: list}
+    crawlMode:     {type: string}
+    advisoryOnly:  {type: boolean}
+    articleCount:  {type: number}

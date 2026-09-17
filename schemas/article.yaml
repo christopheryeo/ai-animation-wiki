@@ -1,0 +1,21 @@
+entity: article
+id_field: articleId
+title_field: articleTitle
+date_field: publishedDate
+fields:
+  articleId:     {type: string, unique: true}
+  articleTitle:  {type: string}
+  publishedDate: {type: datetime}
+  category:      {type: enum}
+  topic:         {type: string}
+  tone:          {type: enum, values: [Factual, Opinionated]}
+  toneSentiment: {type: enum, values: [Positive, Neutral, Negative]}
+  eventType:     {type: enum, values: [Facilitated, Unfacilitated]}
+  tags:          {type: list}
+  outlets:       {type: relation, target: outlet, many: true}
+  countries:     {type: list}
+  coverageCount: {type: number}
+  mediaCount:    {type: number}
+  sourceType:    {type: enum, values: [feed, crawl]}
+  url:           {type: string}
+body_field: contentDescription

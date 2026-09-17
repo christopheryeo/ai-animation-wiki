@@ -1,0 +1,34 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+node_modules/
+dist/
+build/
+index/*.db
+entities/*/catalog.md
+runs/*
+tmp/*
+raw/*
+Inputs/articles/*
+!Inputs/articles/.gitkeep
+
+
+# --- Public-repo exclusions (owner directive 2026-09-17): ignore all content, data, and system files.
+# The public ai-animation-wiki repo carries the framework/tooling only (scripts, tests, schemas).
+entities/
+topics/
+Inputs/
+dashboards/
+index/
+wiki.yaml
+VALIDATION_REPORT.md
+SCRIPT_ADAPTATION_MANIFEST.md
+AGENTS.md
+claude.md
+CLAUDE.md
+.claude/
