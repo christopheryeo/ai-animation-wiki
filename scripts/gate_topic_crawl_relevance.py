@@ -88,6 +88,34 @@ def evaluate(key: str, model: str, topic: dict[str, str], records: list[dict]) -
         raise RuntimeError(f"relevance request failed: {exc}") from exc
 
 
+def evaluate_chunk(key: str, model: str, topic: dict[str, str], chunk: list[dict]) -> list[dict]:
+    """Evaluate a chunk, guaranteeing exactly one assessment per candidate.
+
+    The model occasionally drops or merges items in a larger chunk (a request that
+    otherwise aborts the whole topic). On any count/identity mismatch, split the chunk and
+    retry each half; a single candidate the model still will not assess is recorded as
+    ``held`` — the safe default that never fabricates a relevant/off-topic verdict. This
+    lets the gate keep a cost-efficient batch size without a single drop failing the run.
+    """
+    want = [candidate["uri"] for candidate in chunk]
+    want_set = set(want)
+    try:
+        returned = evaluate(key, model, topic, chunk)
+    except RuntimeError:
+        returned = []
+    by_uri = {a.get("uri"): a for a in returned if a.get("uri") in want_set}
+    if set(by_uri) == want_set:
+        return [by_uri[uri] for uri in want]
+    if len(chunk) == 1:
+        uri = want[0]
+        return [by_uri.get(uri, {
+            "uri": uri, "disposition": "held", "confidence": 0.0,
+            "reason": "relevance model did not return an assessment for this candidate",
+        })]
+    mid = len(chunk) // 2
+    return evaluate_chunk(key, model, topic, chunk[:mid]) + evaluate_chunk(key, model, topic, chunk[mid:])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=Path, required=True)
@@ -126,7 +154,7 @@ def main() -> int:
         assessments = []
         for start in range(0, len(candidates), args.batch_size):
             print(f"{topic_id}: reviewing {start + 1}-{min(start + args.batch_size, len(candidates))} of {len(candidates)}", flush=True)
-            assessments.extend(evaluate(key, args.model, topic, candidates[start:start + args.batch_size]))
+            assessments.extend(evaluate_chunk(key, args.model, topic, candidates[start:start + args.batch_size]))
         if {x["uri"] for x in assessments} != {x["uri"] for x in candidates}:
             raise RuntimeError(f"{topic_id}: model did not return one assessment per candidate")
         output["topics"].append({"topicId": topic_id, "candidateCount": len(candidates), "assessments": assessments})
